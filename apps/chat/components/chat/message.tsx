@@ -7,13 +7,22 @@ import {
   CheckIcon,
   Loader2Icon,
   PaperclipIcon,
+  SmilePlusIcon,
   XIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@/components/chat/markdown";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { REACTION_EMOJIS, summarizeReactions } from "@/lib/chat/reactions";
+import type { MessageReaction } from "@/lib/chat/types";
 import { cn } from "@/lib/utils";
 
 const STREAM_TEXT_TICK_MS = 60;
@@ -33,45 +42,152 @@ export function AgentMessage({
   isStreaming,
   message,
   onInputResponses,
+  onToggleReaction,
+  reactions,
+  viewerId,
 }: {
   readonly canRespond: boolean;
   readonly isStreaming: boolean;
   readonly message: EveMessage;
   readonly onInputResponses: (responses: readonly AgentInputResponse[]) => void | Promise<void>;
+  readonly onToggleReaction?: (messageId: string, emoji: string) => void;
+  readonly reactions?: readonly MessageReaction[];
+  readonly viewerId?: string;
 }) {
   const lastTextIndex = message.parts.reduce(
     (last, part, index) => (part.type === "text" ? index : last),
     -1,
   );
   const isUser = message.role === "user";
+  const canReact = Boolean(onToggleReaction && viewerId && !message.metadata?.optimistic);
+  const handleToggleReaction = (emoji: string) => onToggleReaction?.(message.id, emoji);
 
   return (
     <article
       className={cn(
-        "group flex w-full min-w-0",
+        "group relative flex w-full min-w-0",
         isUser ? "justify-end" : "justify-start",
         message.metadata?.optimistic ? "opacity-90" : undefined,
       )}
     >
       <div
         className={cn(
-          "min-w-0",
-          isUser
-            ? "max-w-[85%] rounded-[18px] border border-border/40 bg-muted/70 px-3 py-1.5 text-sm leading-6 text-foreground shadow-sm"
-            : "w-full max-w-none text-sm leading-relaxed text-foreground",
+          "flex min-w-0 flex-col gap-1.5",
+          isUser ? "max-w-[85%] items-end" : "w-full items-start",
         )}
       >
-        <AgentMessageParts
-          canRespond={canRespond}
-          isUser={isUser}
-          lastTextIndex={lastTextIndex}
-          messageId={message.id}
-          onInputResponses={onInputResponses}
-          parts={message.parts}
-          showCaret={isStreaming && message.role === "assistant"}
-        />
+        <div
+          className={cn(
+            "min-w-0",
+            isUser
+              ? "max-w-full rounded-[18px] border border-border/40 bg-muted/70 px-3 py-1.5 text-sm leading-6 text-foreground shadow-sm"
+              : "w-full max-w-none text-sm leading-relaxed text-foreground",
+          )}
+        >
+          <AgentMessageParts
+            canRespond={canRespond}
+            isUser={isUser}
+            lastTextIndex={lastTextIndex}
+            messageId={message.id}
+            onInputResponses={onInputResponses}
+            parts={message.parts}
+            showCaret={isStreaming && message.role === "assistant"}
+          />
+        </div>
+        {canReact && viewerId ? (
+          <MessageReactions
+            onToggle={handleToggleReaction}
+            reactions={reactions ?? []}
+            viewerId={viewerId}
+          />
+        ) : null}
       </div>
+      {canReact ? (
+        <ReactionPicker
+          className="absolute -top-3 right-0"
+          onSelect={handleToggleReaction}
+        />
+      ) : null}
     </article>
+  );
+}
+
+function ReactionPicker({
+  className,
+  onSelect,
+}: {
+  readonly className?: string;
+  readonly onSelect: (emoji: string) => void;
+}) {
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          aria-label="Add reaction"
+          className={cn(
+            "size-7 rounded-full border-border/60 bg-background text-muted-foreground opacity-0 shadow-sm transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100 data-[state=open]:opacity-100",
+            className,
+          )}
+          size="icon"
+          title="Add reaction"
+          type="button"
+          variant="outline"
+        >
+          <SmilePlusIcon className="size-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="flex min-w-0 gap-0.5 p-1" side="top">
+        {REACTION_EMOJIS.map((emoji) => (
+          <DropdownMenuItem
+            aria-label={`React with ${emoji}`}
+            className="size-8 justify-center p-0 text-base"
+            key={emoji}
+            onSelect={() => onSelect(emoji)}
+          >
+            {emoji}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function MessageReactions({
+  onToggle,
+  reactions,
+  viewerId,
+}: {
+  readonly onToggle: (emoji: string) => void;
+  readonly reactions: readonly MessageReaction[];
+  readonly viewerId: string;
+}) {
+  const summaries = summarizeReactions(reactions, viewerId);
+
+  if (summaries.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1" data-slot="message-reactions">
+      {summaries.map((summary) => (
+        <button
+          aria-label={`${summary.emoji} ${summary.count} ${summary.count === 1 ? "reaction" : "reactions"}${summary.reactedByViewer ? ", including yours" : ""}`}
+          aria-pressed={summary.reactedByViewer}
+          className={cn(
+            "inline-flex h-6 items-center gap-1 rounded-full border px-2 text-xs tabular-nums transition-colors",
+            summary.reactedByViewer
+              ? "border-primary/40 bg-primary/10 text-foreground"
+              : "border-border/60 bg-muted/40 text-muted-foreground hover:bg-muted",
+          )}
+          key={summary.emoji}
+          onClick={() => onToggle(summary.emoji)}
+          type="button"
+        >
+          <span className="text-sm leading-none">{summary.emoji}</span>
+          <span>{summary.count}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 

@@ -11,8 +11,10 @@ import {
   saveChatSnapshot,
   saveChatSessionState,
   skipChatAuthorization,
+  toggleMessageReaction,
 } from "@/lib/db/queries";
 import { assertChatMessageLength } from "@/lib/chat/limits";
+import { assertMessageReactionInput } from "@/lib/chat/reactions";
 import { getServerViewer } from "@/lib/session";
 import { getSetupStatus } from "@/lib/setup";
 
@@ -116,6 +118,23 @@ export async function saveChatSessionStateAction(input: {
   });
 
   return { ok: true };
+}
+
+export async function toggleMessageReactionAction(input: {
+  readonly chatId: string;
+  readonly emoji: string;
+  readonly messageId: string;
+}) {
+  const viewer = await requireViewer();
+
+  assertMessageReactionInput(input);
+
+  return toggleMessageReaction({
+    chatId: input.chatId,
+    emoji: input.emoji,
+    messageId: input.messageId,
+    userId: viewer.id,
+  });
 }
 
 export async function deleteChatAction(chatId: string) {

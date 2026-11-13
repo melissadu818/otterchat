@@ -2,9 +2,15 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, lt, or, sql } from "drizzle-orm";
 import type { HandleMessageStreamEvent, SessionState } from "eve/client";
 import { isChatTurnSettledEvent } from "@/lib/chat/events";
-import type { ActiveChat, ChatListItem, ChatListPage } from "@/lib/chat/types";
+import type {
+  ActiveChat,
+  ChatListItem,
+  ChatListPage,
+  MessageReaction,
+  MessageReactionMap,
+} from "@/lib/chat/types";
 import { createFallbackTitle, DEFAULT_CHAT_TITLE } from "@/lib/chat/title";
-import { chat, chatEvent } from "@/lib/db/schema";
+import { chat, chatEvent, messageReaction } from "@/lib/db/schema";
 import { db } from "@/lib/db/client";
 
 const CHAT_HISTORY_PAGE_SIZE = 20;
@@ -177,14 +183,17 @@ export async function getChatForUser(chatId: string, userId: string): Promise<Ac
     return null;
   }
 
-  const events = await db
-    .select({
-      createdAt: chatEvent.createdAt,
-      event: chatEvent.event,
-    })
-    .from(chatEvent)
-    .where(eq(chatEvent.chatId, chatId))
-    .orderBy(asc(chatEvent.eventIndex));
+  const [events, reactions] = await Promise.all([
+    db
+      .select({
+        createdAt: chatEvent.createdAt,
+        event: chatEvent.event,
+      })
+      .from(chatEvent)
+      .where(eq(chatEvent.chatId, chatId))
+      .orderBy(asc(chatEvent.eventIndex)),
+    listMessageReactions(chatId),
+  ]);
 
   const eventValues = events.map((eventRow) => eventRow.event);
   const pendingMessageCreatedAt = row.pendingUserMessageCreatedAt;
@@ -201,6 +210,7 @@ export async function getChatForUser(chatId: string, userId: string): Promise<Ac
     events: eventValues,
     id: row.id,
     pendingUserMessage: hasCurrentTurnCompleted ? null : row.pendingUserMessage,
+    reactions,
     session: row.eveSession ?? undefined,
     title: row.title,
   };
@@ -454,4 +464,71 @@ export async function saveChatSnapshot({
 
 export async function deleteChatForUser(chatId: string, userId: string) {
   await db.delete(chat).where(and(eq(chat.id, chatId), eq(chat.userId, userId)));
+}
+
+export async function listMessageReactions(chatId: string): Promise<MessageReactionMap> {
+  const rows = await db
+    .select({
+      emoji: messageReaction.emoji,
+      messageId: messageReaction.messageId,
+      userId: messageReaction.userId,
+    })
+    .from(messageReaction)
+    .where(eq(messageReaction.chatId, chatId))
+    .orderBy(asc(messageReaction.createdAt), asc(messageReaction.id));
+  const grouped: Record<string, MessageReaction[]> = {};
+
+  for (const row of rows) {
+    (grouped[row.messageId] ??= []).push({ emoji: row.emoji, userId: row.userId });
+  }
+
+  return grouped;
+}
+
+export async function toggleMessageReaction({
+  chatId,
+  emoji,
+  messageId,
+  userId,
+}: {
+  readonly chatId: string;
+  readonly emoji: string;
+  readonly messageId: string;
+  readonly userId: string;
+}) {
+  const [ownedChat] = await db
+    .select({ id: chat.id })
+    .from(chat)
+    .where(and(eq(chat.id, chatId), eq(chat.userId, userId)))
+    .limit(1);
+
+  if (!ownedChat) {
+    throw new Error("Chat not found.");
+  }
+
+  const matchesReaction = and(
+    eq(messageReaction.chatId, chatId),
+    eq(messageReaction.messageId, messageId),
+    eq(messageReaction.userId, userId),
+    eq(messageReaction.emoji, emoji),
+  );
+  const removed = await db
+    .delete(messageReaction)
+    .where(matchesReaction)
+    .returning({ id: messageReaction.id });
+
+  if (removed.length === 0) {
+    await db
+      .insert(messageReaction)
+      .values({ chatId, emoji, id: randomUUID(), messageId, userId })
+      .onConflictDoNothing();
+  }
+
+  const reactions = await db
+    .select({ emoji: messageReaction.emoji, userId: messageReaction.userId })
+    .from(messageReaction)
+    .where(and(eq(messageReaction.chatId, chatId), eq(messageReaction.messageId, messageId)))
+    .orderBy(asc(messageReaction.createdAt), asc(messageReaction.id));
+
+  return { active: removed.length === 0, messageId, reactions };
 }

@@ -46,5 +46,29 @@ export const chatEvent = pgTable(
   ],
 );
 
+export const messageReaction = pgTable(
+  "message_reaction",
+  {
+    id: text("id").primaryKey(),
+    chatId: text("chat_id")
+      .notNull()
+      .references(() => chat.id, { onDelete: "cascade" }),
+    messageId: text("message_id").notNull(),
+    userId: text("user_id").notNull(),
+    emoji: text("emoji").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("idx_message_reaction_unique").on(
+      table.chatId,
+      table.messageId,
+      table.userId,
+      table.emoji,
+    ),
+    index("idx_message_reaction_chat_message").on(table.chatId, table.messageId),
+  ],
+);
+
 export type Chat = typeof chat.$inferSelect;
 export type ChatEvent = typeof chatEvent.$inferSelect;
+export type MessageReactionRow = typeof messageReaction.$inferSelect;
