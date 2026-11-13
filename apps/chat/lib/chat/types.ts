@@ -21,10 +21,18 @@ export type ChatListPage = {
   readonly nextCursor: string | null;
 };
 
+export type MessageReaction = {
+  readonly emoji: string;
+  readonly userId: string;
+};
+
+export type MessageReactionMap = Readonly<Record<string, readonly MessageReaction[]>>;
+
 export type ActiveChat = {
   readonly events: readonly HandleMessageStreamEvent[];
   readonly id: string;
   readonly pendingUserMessage: string | null;
+  readonly reactions?: MessageReactionMap;
   readonly session: SessionState | undefined;
   readonly title: string;
 };

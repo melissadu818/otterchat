@@ -40,15 +40,19 @@ export async function isDatabaseSchemaReady() {
     const rows = (await sql`
       select
         to_regclass('public.chat') is not null as chat_ready,
-        to_regclass('public.chat_event') is not null as chat_event_ready
+        to_regclass('public.chat_event') is not null as chat_event_ready,
+        to_regclass('public.message_reaction') is not null as message_reaction_ready
     `) as unknown as [
       {
         readonly chat_event_ready: boolean;
         readonly chat_ready: boolean;
+        readonly message_reaction_ready: boolean;
       },
     ];
     const result = rows[0];
-    const ready = Boolean(result?.chat_ready && result.chat_event_ready);
+    const ready = Boolean(
+      result?.chat_ready && result.chat_event_ready && result.message_reaction_ready,
+    );
 
     return ready;
   } catch {

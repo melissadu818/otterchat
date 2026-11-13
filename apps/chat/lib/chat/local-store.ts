@@ -2,6 +2,11 @@
 
 import type { HandleMessageStreamEvent, SessionState } from "eve/client";
 import { createFallbackTitle, DEFAULT_CHAT_TITLE } from "@/lib/chat/title";
+import {
+  assertMessageReactionInput,
+  setMessageReactions,
+  toggleReactionInList,
+} from "@/lib/chat/reactions";
 import type { ActiveChat, ChatListItem } from "@/lib/chat/types";
 
 const STORAGE_KEY = "eve-chat-template:chats";
@@ -141,6 +146,40 @@ export function skipLocalChatAuthorization({
   };
 }
 
+export function toggleLocalMessageReaction({
+  chatId,
+  emoji,
+  messageId,
+  userId,
+}: {
+  readonly chatId: string;
+  readonly emoji: string;
+  readonly messageId: string;
+  readonly userId: string;
+}) {
+  assertMessageReactionInput({ emoji, messageId });
+
+  const chat = updateChat(chatId, (current) => {
+    const currentReactions = current.reactions ?? {};
+    const messageReactions = toggleReactionInList(currentReactions[messageId] ?? [], {
+      emoji,
+      userId,
+    });
+
+    return {
+      ...current,
+      reactions: setMessageReactions(currentReactions, messageId, messageReactions),
+    };
+  });
+  const reactions = chat.reactions?.[messageId] ?? [];
+
+  return {
+    active: reactions.some((reaction) => reaction.emoji === emoji && reaction.userId === userId),
+    messageId,
+    reactions,
+  };
+}
+
 function updateChat(chatId: string, update: (chat: StoredChat) => StoredChat) {
   const currentChat = readState().chats.find((chat) => chat.id === chatId);
 
@@ -214,6 +253,7 @@ function toActiveChat(chat: StoredChat): ActiveChat {
     events: chat.events,
     id: chat.id,
     pendingUserMessage: chat.pendingUserMessage ?? null,
+    reactions: chat.reactions ?? {},
     session: chat.session,
     title: chat.title,
   };

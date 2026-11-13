@@ -41,8 +41,14 @@ import {
   saveClientChatSession,
   saveClientChatSnapshot,
   skipClientChatAuthorization,
+  toggleClientMessageReaction,
 } from "@/lib/chat/persistence-client";
-import type { ActiveChat, SetupStatus, Viewer } from "@/lib/chat/types";
+import {
+  ANONYMOUS_REACTION_USER_ID,
+  setMessageReactions,
+  toggleReactionInList,
+} from "@/lib/chat/reactions";
+import type { ActiveChat, MessageReactionMap, SetupStatus, Viewer } from "@/lib/chat/types";
 import {
   IMAGE_MODEL_HEADER,
   TEXT_MODEL_HEADER,
@@ -720,6 +726,10 @@ export function AgentChatSession({
     setMessage: setLocalPendingUserMessage,
   } = usePendingUserMessage();
   const [skippingAuthorizationKey, setSkippingAuthorizationKey] = useState<string | null>(null);
+  const [reactions, setReactions] = useState<MessageReactionMap>(activeChat?.reactions ?? {});
+  const reactionsRef = useRef(reactions);
+  const reactionsChatIdRef = useRef(activeChat?.id ?? chatId ?? null);
+  const reactionRequestsRef = useRef(new Map<string, number>());
   // continuation requests carry no picker state, so replay the last selection
   const modelHeadersRef = useRef<Record<string, string>>({
     [IMAGE_MODEL_HEADER]: resolveImageModel(undefined).id,
@@ -750,6 +760,7 @@ export function AgentChatSession({
   const isAnonChatSession = !viewer && Boolean(anonChatId);
   const canPersistChat = Boolean(viewer) || isAnonChatSession;
   const chatStorageMode = viewer ? storageMode : "browser";
+  const reactionUserId = viewer?.id ?? ANONYMOUS_REACTION_USER_ID;
   const router = useRouter();
 
   const startFinalizingTurn = useCallback(() => {
@@ -860,6 +871,7 @@ export function AgentChatSession({
           events,
           id: chatId,
           pendingUserMessage: null,
+          reactions: reactionsRef.current,
           session,
           title: currentTitleRef.current,
         });
@@ -1009,6 +1021,7 @@ export function AgentChatSession({
     !isTurnBlocked &&
     !isWaitingForAuthorization;
   const isChatRoute = Boolean(shellActiveChatId || chatId);
+  const canReact = Boolean(activeChatId) && canPersistChat && isSetupReady;
   const showThinking =
     !isWaitingForAuthorization &&
     (Boolean(pendingMessage || localPendingMessage) || hasOpenTurn || isTurnBlocked);
@@ -1302,6 +1315,7 @@ export function AgentChatSession({
           events: skippedEvents,
           id: chatId,
           pendingUserMessage: null,
+          reactions: reactionsRef.current,
           session: nextSession,
           title: currentTitleRef.current,
         });
@@ -1342,6 +1356,70 @@ export function AgentChatSession({
   useEffect(() => {
     activeChatIdRef.current = activeChatId;
   }, [activeChatId]);
+
+  useEffect(() => {
+    reactionsRef.current = reactions;
+  }, [reactions]);
+
+  useEffect(() => {
+    const nextChatId = activeChat?.id ?? chatId ?? null;
+    const chatChanged = reactionsChatIdRef.current !== nextChatId;
+
+    reactionsChatIdRef.current = nextChatId;
+    if (chatChanged) {
+      reactionRequestsRef.current.clear();
+    }
+    if (activeChat?.reactions) {
+      setReactions(activeChat.reactions);
+    } else if (chatChanged) {
+      setReactions({});
+    }
+  }, [activeChat?.id, activeChat?.reactions, chatId]);
+
+  const handleToggleReaction = useCallback(
+    (messageId: string, emoji: string) => {
+      const chatId = activeChatIdRef.current;
+
+      if (!chatId) {
+        return;
+      }
+
+      const toggle = (current: MessageReactionMap) =>
+        setMessageReactions(
+          current,
+          messageId,
+          toggleReactionInList(current[messageId] ?? [], { emoji, userId: reactionUserId }),
+        );
+      const requestId = (reactionRequestsRef.current.get(messageId) ?? 0) + 1;
+      const isLatestRequest = () =>
+        activeChatIdRef.current === chatId &&
+        reactionRequestsRef.current.get(messageId) === requestId;
+
+      reactionRequestsRef.current.set(messageId, requestId);
+      setReactions(toggle);
+
+      void toggleClientMessageReaction(chatStorageMode, {
+        chatId,
+        emoji,
+        messageId,
+        userId: reactionUserId,
+      })
+        .then((result) => {
+          if (isLatestRequest()) {
+            setReactions((current) =>
+              setMessageReactions(current, messageId, result.reactions),
+            );
+          }
+        })
+        .catch((error: unknown) => {
+          if (isLatestRequest()) {
+            setReactions(toggle);
+          }
+          setClientError(error instanceof Error ? error.message : "Failed to save reaction.");
+        });
+    },
+    [chatStorageMode, reactionUserId],
+  );
 
   useEffect(() => {
     const nextChatId = activeChat?.id ?? chatId ?? null;
@@ -1601,6 +1679,11 @@ export function AgentChatSession({
                     key={message.id}
                     message={message}
                     onInputResponses={handleInputResponses}
+                    onToggleReaction={
+                      canReact && !message.metadata?.optimistic ? handleToggleReaction : undefined
+                    }
+                    reactions={reactions[message.id]}
+                    viewerId={reactionUserId}
                   />
                 ))}
                 {pendingAuthorizations.map((authorization) => (

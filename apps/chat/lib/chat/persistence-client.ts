@@ -10,6 +10,7 @@ import {
   saveChatSessionStateAction,
   saveChatSnapshotAction,
   skipChatAuthorizationAction,
+  toggleMessageReactionAction,
 } from "@/app/actions/chat";
 import {
   appendLocalChatEvent,
@@ -22,6 +23,7 @@ import {
   saveLocalChatSession,
   saveLocalChatSnapshot,
   skipLocalChatAuthorization,
+  toggleLocalMessageReaction,
 } from "@/lib/chat/local-store";
 import type { StorageMode } from "@/lib/chat/types";
 
@@ -141,4 +143,22 @@ export async function skipClientChatAuthorization(
   return storageMode === "browser"
     ? skipLocalChatAuthorization(input)
     : skipChatAuthorizationAction(input);
+}
+
+export async function toggleClientMessageReaction(
+  storageMode: StorageMode,
+  input: {
+    readonly chatId: string;
+    readonly emoji: string;
+    readonly messageId: string;
+    readonly userId: string;
+  },
+) {
+  return storageMode === "browser"
+    ? toggleLocalMessageReaction(input)
+    : toggleMessageReactionAction({
+        chatId: input.chatId,
+        emoji: input.emoji,
+        messageId: input.messageId,
+      });
 }
